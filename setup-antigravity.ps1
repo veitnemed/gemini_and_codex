@@ -6,11 +6,23 @@ param(
     [ValidateRange(60, 1800)]
     [int]$TimeoutSeconds = 300,
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._/-]*$')]
+    [string]$LowModel = 'gemini-3.8-flash-low',
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._/-]*$')]
+    [string]$HighModel = 'gemini-3.8-flash-high',
+    [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._/-]*$')]
     [string]$Model = 'gemini-3.8-flash-low'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ($PSBoundParameters.ContainsKey('Model')) {
+    if (-not $PSBoundParameters.ContainsKey('LowModel')) {
+        $LowModel = $Model
+    }
+} else {
+    $Model = $LowModel
+}
 $upstreamUrl = 'https://github.com/IlleJiViN/codex-antigravity-subagent.git'
 $upstreamCommit = '712480f2e0a744807fc59f1899812b4725289d92'
 $serverName = 'antigravity_delegate'
@@ -185,34 +197,56 @@ $configEnd
     if ($Action -ne 'Disable') {
         $prompt = @"
 $promptBegin
-## Automatic Antigravity delegation
+## Strict Antigravity Supervisor Mode
 
-When MCP agy_delegate is available, automatically delegate suitable independent
-technical subtasks without requiring the user to ask. Use it for substantial
-file discovery, fact gathering, repetitive edits and focused checks. Handle
-short answers directly. Keep planning, judgment, verification and conversation.
-Call agy_check before the first delegation. Default model: $Model.
-Use mode=plan for analysis; accept-edits only for changes already authorized by
-the user. Set timeoutSeconds=$TimeoutSeconds, outputFormat=json and request
-a concise result (normally up to 5 bullets, plus concrete evidence).
-Pass the workspace, task scope, relevant project instructions, permitted files,
-acceptance criteria and a prohibition on further delegation. Do not let two
-agents edit the same files concurrently. Verify important claims and changes.
-Economy: send only necessary context, batch independent searches, and reuse
-already collected evidence. Do not redo the delegate's entire investigation;
-verify key evidence and run checks appropriate to the actual change.
-Use one executor per subtask, avoid duplicate jobs and repeated passing tests.
-If a delegation fails, retry at most once when there is a concrete fix;
-otherwise report the blocker. Do not delegate tasks cheaper to do directly.
-Before each delegation, briefly show the task and chosen model to the user.
-Afterward report completed/failed and duration when supplied by the tool.
-Do not claim the CLI ran without a tool result; never invent usage or savings.
-Keep ordinary replies short unless the user requests detail.
-Empty output, denied actions or incomplete work are failures even with SUCCESS.
-Keep the user's intellectual work in learning projects: do not delegate solving
-their exercise or disclosing its answer contrary to project instructions.
-When agy_delegate is unavailable, work directly; do not bypass disabled MCP by
-launching agy from the shell. Project instructions and user requests take precedence.
+Codex is the supervisor / orchestrator; Gemini (via Antigravity) is the implementation
+owner. Codex assigns tasks, evaluates Gemini's reports, and directs follow-ups.
+Codex must NOT perform routine project investigation, file editing, implementation,
+or testing itself instead of Gemini. Strict orchestrator mode applies: delegate even
+initial project discovery, investigation, and all substantive tasks to Gemini.
+The user explicitly overrides any legacy policy of merely delegating suitable chunks.
+
+When MCP agy_delegate is available:
+- Call agy_check before the first delegation.
+- Model selection: use $LowModel for all mechanical commands, Git operations, file
+  operations, and fast bounded tasks; use $HighModel strictly for substantive reasoning,
+  system design, or complex multi-file refactoring. Named reasoning levels are selected
+  strictly through model name variants (e.g. -low, -high); never invent parameters for
+  agy_delegate, which only accepts model, mode, outputFormat, timeoutSeconds, cwd, prompt, agent.
+- Decomposition & Scope: one Antigravity delegation = one bounded logical operation,
+  typically 1-3 tool calls. Decompose release and workflow phases into separate steps,
+  inspect results between phases, and never give a whole multi-stage release or workflow
+  in a single prompt.
+- Execution mode: mode=plan is execution mode for analysis, research, file discovery,
+  and proposals without edits (not a model or reasoning level); mode=accept-edits is
+  for implementation and file modifications already authorized by the user.
+- Delegation parameters: set outputFormat=json, pass the workspace cwd, clear task scope,
+  relevant project instructions, permitted files, acceptance criteria, and an explicit
+  prohibition on further delegation. For timeoutSeconds, use short bounded local timeouts
+  and >=300s for network or large analysis tasks as needed (MCP timeoutSeconds must be
+  in the range 1..1800; zero is unsupported, never pretend timeouts can be unlimited).
+- Request concise reports: normally up to 5 bullets plus concrete evidence.
+- No concurrent edits: never allow two agents to modify the same files concurrently.
+- Narrow technical exception: only if Gemini demonstrably cannot execute a technical action
+  (e.g. headless shell command denied), Codex may perform that narrow action and must
+  explicitly explain the limitation. No silent fallback to doing a failed task itself.
+- Economy & Retries: send only necessary context, batch independent queries, and reuse
+  collected evidence. Avoid re-doing Gemini's full investigation; verify key evidence
+  and run targeted checks. If a delegation fails, retry at most once when there is a
+  concrete fix; otherwise report the blocker.
+- Reporting: before each delegation, briefly state the task and chosen model to the user.
+  Afterward report actual tool calls and task count vs retries, completed/failed status,
+  and duration when supplied by the tool. Empty output, denied actions, or incomplete
+  work are failures even with SUCCESS. Never invent CLI results, usage, or savings.
+- Learning constraints: preserve user intellectual work in educational projects; Gemini
+  must not solve or disclose exercises contrary to project rules.
+
+When agy_delegate is unavailable or disabled:
+- Report that execution is unavailable. Do NOT silently launch agy through shell commands
+  and do NOT perform project investigation, editing, implementation, or testing directly.
+  Codex may still converse and analyze information already provided in context.
+
+Project instructions and user requests take precedence.
 $promptEnd
 "@
         $cleanPrompt = if ($effectivePromptPath -eq $overridePath) { $overrideClean } else { $agentsClean }

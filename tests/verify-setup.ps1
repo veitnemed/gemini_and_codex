@@ -34,6 +34,13 @@ Assert-True ($status.Registered -and $status.Enabled -and $status.InstructionsIn
 $installedConfig = [IO.File]::ReadAllText($configFile)
 Assert-True ($installedConfig.StartsWith($originalConfig)) 'Original TOML root keys and multiline string stay before new table'
 Assert-True ([IO.File]::ReadAllText($agentsFile).EndsWith($originalAgents)) 'Original instructions are preserved'
+$defaultAgents = [IO.File]::ReadAllText($agentsFile)
+Assert-True ($defaultAgents -match 'Strict Antigravity Supervisor Mode' -and $defaultAgents -match 'Codex is the supervisor' -and $defaultAgents -match 'implementation\s+owner') 'Policy establishes strict supervisor and implementation ownership'
+Assert-True ($defaultAgents.Contains('gemini-3.8-flash-low') -and $defaultAgents.Contains('gemini-3.8-flash-high')) 'Policy includes both low and high model defaults'
+Assert-True ($defaultAgents -match 'mode=plan' -and $defaultAgents -match 'mode=accept-edits') 'Policy defines plan and accept-edits execution modes'
+Assert-True ($defaultAgents -match 'cannot execute a technical action' -and $defaultAgents -match 'No silent fallback') 'Policy forbids silent fallback and restricts supervisor direct action to narrow technical blockers'
+Assert-True ($defaultAgents -match 'unavailable or disabled' -and $defaultAgents -match 'execution is unavailable') 'Policy instructs supervisor to report execution unavailable when MCP is off or unavailable'
+Assert-True ($defaultAgents -match 'retries' -and $defaultAgents -match 'educational projects') 'Policy preserves prompt economy, retry limits and learning constraints'
 $firstConfigBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile))
 $firstAgentsBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile))
 $backupCount = @(Get-ChildItem -LiteralPath (Join-Path $testCodex 'backups') -Directory).Count
@@ -73,12 +80,28 @@ Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile)) -ce
 $status = & $installer -Action Status -CodexDirectory $testCodex
 Assert-True ($status.Enabled -and $status.InstructionsInstalled) 'Enable restores the mode'
 
+# Verify backwards compatibility of -Model: overrides low model while keeping high model default
+& $installer -Action Enable -CodexDirectory $testCodex -Model 'compat-legacy-model'
+$legacyAgents = [IO.File]::ReadAllText($agentsFile)
+Assert-True ($legacyAgents.Contains('compat-legacy-model') -and $legacyAgents.Contains('gemini-3.8-flash-high')) 'Legacy -Model sets low model while keeping high model default'
+Assert-True ($legacyAgents.EndsWith($originalAgents)) 'Original instructions remain preserved under -Model'
+
+# Verify explicit LowModel and HighModel parameters
+& $installer -Action Enable -CodexDirectory $testCodex -LowModel 'custom-low' -HighModel 'custom-high'
+$customAgents = [IO.File]::ReadAllText($agentsFile)
+Assert-True ($customAgents.Contains('custom-low') -and $customAgents.Contains('custom-high')) 'Explicit LowModel and HighModel are reflected in policy'
+Assert-True ($customAgents.EndsWith($originalAgents)) 'Original instructions remain preserved under explicit LowModel and HighModel'
+
+# Re-enable with default models for subsequent tests
+& $installer -Action Enable -CodexDirectory $testCodex
+
 # Switching to a global override must move the managed rule, keeping both files.
 $originalOverride = '# User override' + "`n" + '- Keep this override.'
 [IO.File]::WriteAllText($overrideFile, $originalOverride, $utf8)
 & $installer -Action Enable -CodexDirectory $testCodex
 $status = & $installer -Action Status -CodexDirectory $testCodex
 Assert-True ($status.EffectiveInstructions -eq $overrideFile -and $status.InstructionsInstalled) 'Nonempty global override receives the rule'
+Assert-True ([IO.File]::ReadAllText($overrideFile).Contains('Strict Antigravity Supervisor Mode')) 'Override instructions receive strict supervisor policy'
 Assert-True ([IO.File]::ReadAllText($agentsFile) -ceq $originalAgents) 'Old managed rule removed from base instructions'
 
 & $installer -Action Uninstall -CodexDirectory $testCodex
