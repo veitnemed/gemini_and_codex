@@ -4,6 +4,8 @@ function connect(serverPath, timeoutMs) {
   const child = spawn(process.execPath, [serverPath], {
     stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
   });
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
   const pending = new Map();
   let buffer = '', stderr = '', nextId = 0, ended = false, error;
   const timer = setTimeout(() => stop(new Error('MCP timed out')), timeoutMs);

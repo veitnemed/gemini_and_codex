@@ -79,8 +79,8 @@ async function main() {
     record.finishedAt = new Date().toISOString();
     record.elapsedSeconds = (Date.now() - started) / 1000;
     record.mcpStderr = client.stderr;
-    save();
     client.close();
+    save();
   }
 }
 if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });
