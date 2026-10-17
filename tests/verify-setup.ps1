@@ -30,17 +30,24 @@ Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile)) -ce
 
 & $installer -Action Install -CodexDirectory $testCodex
 $status = & $installer -Action Status -CodexDirectory $testCodex
-Assert-True ($status.Registered -and $status.Enabled -and $status.InstructionsInstalled -and $status.BridgePresent) 'Installation is enabled and complete'
+Assert-True ($status.Registered -and $status.Enabled -and $status.InstructionsInstalled -and $status.BridgePresent -and $status.LunaRegistered -and $status.LunaEnabled -and $status.LunaPresent) 'Installation is enabled and complete for Antigravity and Luna'
+$lunaServerPath = Join-Path $testCodex 'tools\luna-bridge\server.cjs'
+Assert-True (Test-Path -LiteralPath $lunaServerPath -PathType Leaf) 'Luna bridge script exists at managed path'
 $installedConfig = [IO.File]::ReadAllText($configFile)
 Assert-True ($installedConfig.StartsWith($originalConfig)) 'Original TOML root keys and multiline string stay before new table'
+Assert-True ($installedConfig.Contains('[mcp_servers.luna_bridge]')) 'Config registers luna_bridge MCP server'
 Assert-True ([IO.File]::ReadAllText($agentsFile).EndsWith($originalAgents)) 'Original instructions are preserved'
 $defaultAgents = [IO.File]::ReadAllText($agentsFile)
-Assert-True ($defaultAgents -match 'Strict Antigravity Supervisor Mode' -and $defaultAgents -match 'Codex is the supervisor' -and $defaultAgents -match 'implementation\s+owner') 'Policy establishes strict supervisor and implementation ownership'
+Assert-True ($defaultAgents -match 'Strict Antigravity & Luna Supervisor Mode' -and $defaultAgents -match 'Codex is the supervisor' -and $defaultAgents -match 'executors') 'Policy establishes strict supervisor and executors'
+Assert-True ($defaultAgents -match 'Antigravity \(Gemini\) and Luna are implementation\s+executors') 'Policy defines Gemini and Luna as implementation executors'
+Assert-True ($defaultAgents -match 'visible MCP tools luna_check\s*/\s*luna_delegate') 'Policy requires Luna to be called via visible MCP tools'
 Assert-True ($defaultAgents.Contains('gemini-3.8-flash-low') -and $defaultAgents.Contains('gemini-3.8-flash-high')) 'Policy includes both low and high model defaults'
 Assert-True ($defaultAgents -match 'mode=plan' -and $defaultAgents -match 'mode=accept-edits') 'Policy defines plan and accept-edits execution modes'
-Assert-True ($defaultAgents -match 'cannot execute a technical action' -and $defaultAgents -match 'No silent fallback') 'Policy forbids silent fallback and restricts supervisor direct action to narrow technical blockers'
+Assert-True ($defaultAgents -match 'direct\s+execution of project tasks by the Codex supervisor is prohibited' -and $defaultAgents -match 'do not silently fall back') 'Policy prohibits direct execution by supervisor and forbids silent fallback'
 Assert-True ($defaultAgents -match 'unavailable or disabled' -and $defaultAgents -match 'execution is unavailable') 'Policy instructs supervisor to report execution unavailable when MCP is off or unavailable'
-Assert-True ($defaultAgents -match 'retries' -and $defaultAgents -match 'educational projects') 'Policy preserves prompt economy, retry limits and learning constraints'
+Assert-True ($defaultAgents -match 'Worker contract for child Codex CLI \(leaf executor\)' -and $defaultAgents -match 'NEVER delegate further') 'Policy establishes child Codex leaf executor contract'
+Assert-True ($defaultAgents -match 'No false promises of a separate quota') 'Policy clarifies Luna quota reality'
+Assert-True ($defaultAgents.EndsWith($originalAgents)) 'Original user instructions and restrictions are preserved'
 $firstConfigBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile))
 $firstAgentsBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile))
 $backupCount = @(Get-ChildItem -LiteralPath (Join-Path $testCodex 'backups') -Directory).Count
@@ -54,6 +61,8 @@ try {
     $env:CODEX_HOME = $testCodex
     $parsedConfig = & $status.Codex mcp get antigravity_delegate --json | ConvertFrom-Json
     Assert-True ($LASTEXITCODE -eq 0 -and $parsedConfig.enabled -and $parsedConfig.transport.type -eq 'stdio') 'Codex itself parses the installed TOML and server registration'
+    $parsedLunaConfig = & $status.Codex mcp get luna_bridge --json | ConvertFrom-Json
+    Assert-True ($LASTEXITCODE -eq 0 -and $parsedLunaConfig.enabled -and $parsedLunaConfig.transport.type -eq 'stdio') 'Codex itself parses the installed TOML and luna_bridge registration'
 } finally { $env:CODEX_HOME = $previousCodexDirectory }
 
 $bundle = Join-Path $testCodex 'tools\antigravity-bridge\712480f2e0a744807fc59f1899812b4725289d92\plugins\antigravity-subagent\mcp\dist\server.cjs'
@@ -62,12 +71,19 @@ Assert-True ($LASTEXITCODE -eq 0) 'Real bundled MCP server works on Windows'
 
 & $installer -Action Disable -CodexDirectory $testCodex
 $status = & $installer -Action Status -CodexDirectory $testCodex
-Assert-True ($status.Registered -and -not $status.Enabled -and -not $status.InstructionsInstalled) 'Disable turns off MCP and removes delegation instruction'
+Assert-True ($status.Registered -and -not $status.Enabled -and $status.LunaRegistered -and -not $status.LunaEnabled -and -not $status.InstructionsInstalled) 'Disable turns off both MCP servers and removes delegation instruction'
 $testRejected = $false
 try { & $installer -Action Test -CodexDirectory $testCodex } catch { $testRejected = $_.Exception.Message -like '*disabled*' }
 Assert-True $testRejected 'Live verification cannot bypass disabled mode'
 Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile)) -ceq $originalAgentsBytes) 'Disable restores exact original instruction bytes'
 $disabledConfigBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile))
+$disabledAgentsBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile))
+$disabledBackupCount = @(Get-ChildItem -LiteralPath (Join-Path $testCodex 'backups') -Directory).Count
+& $installer -Action Disable -CodexDirectory $testCodex
+Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile)) -ceq $disabledConfigBytes) 'Repeated disable leaves configuration identical'
+Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile)) -ceq $disabledAgentsBytes) 'Repeated disable leaves instructions identical'
+Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $testCodex 'backups') -Directory).Count -eq $disabledBackupCount) 'Repeated disable creates no unnecessary backup'
+
 $failedWrite = $false
 $lockStream = [IO.File]::Open($agentsFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
 try {
@@ -78,7 +94,14 @@ Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile)) -ce
 Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile)) -ceq $originalAgentsBytes) 'Write failure preserves the locked instruction file'
 & $installer -Action Enable -CodexDirectory $testCodex
 $status = & $installer -Action Status -CodexDirectory $testCodex
-Assert-True ($status.Enabled -and $status.InstructionsInstalled) 'Enable restores the mode'
+Assert-True ($status.Enabled -and $status.LunaEnabled -and $status.InstructionsInstalled) 'Enable restores the mode for both bridges'
+$enabledConfigBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile))
+$enabledAgentsBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile))
+$enabledBackupCount = @(Get-ChildItem -LiteralPath (Join-Path $testCodex 'backups') -Directory).Count
+& $installer -Action Enable -CodexDirectory $testCodex
+Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile)) -ceq $enabledConfigBytes) 'Repeated enable leaves configuration identical'
+Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile)) -ceq $enabledAgentsBytes) 'Repeated enable leaves instructions identical'
+Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $testCodex 'backups') -Directory).Count -eq $enabledBackupCount) 'Repeated enable creates no unnecessary backup'
 
 # Verify backwards compatibility of -Model: overrides low model while keeping high model default
 & $installer -Action Enable -CodexDirectory $testCodex -Model 'compat-legacy-model'
@@ -101,7 +124,7 @@ $originalOverride = '# User override' + "`n" + '- Keep this override.'
 & $installer -Action Enable -CodexDirectory $testCodex
 $status = & $installer -Action Status -CodexDirectory $testCodex
 Assert-True ($status.EffectiveInstructions -eq $overrideFile -and $status.InstructionsInstalled) 'Nonempty global override receives the rule'
-Assert-True ([IO.File]::ReadAllText($overrideFile).Contains('Strict Antigravity Supervisor Mode')) 'Override instructions receive strict supervisor policy'
+Assert-True ([IO.File]::ReadAllText($overrideFile).Contains('Strict Antigravity & Luna Supervisor Mode')) 'Override instructions receive strict supervisor policy'
 Assert-True ([IO.File]::ReadAllText($agentsFile) -ceq $originalAgents) 'Old managed rule removed from base instructions'
 
 & $installer -Action Uninstall -CodexDirectory $testCodex
@@ -109,6 +132,16 @@ Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile)) -ce
 Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile)) -ceq $originalAgentsBytes) 'Uninstall restores exact base instruction bytes'
 Assert-True ([IO.File]::ReadAllText($overrideFile) -ceq $originalOverride) 'Uninstall preserves user override'
 Assert-True (Test-Path -LiteralPath $bundle) 'Uninstall retains downloaded source'
+Assert-True (-not (Test-Path -LiteralPath $lunaServerPath -PathType Leaf)) 'Uninstall removes managed Luna server file'
+$uninstalledConfigBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile))
+$uninstalledAgentsBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile))
+$uninstalledOverrideBytes = [Convert]::ToBase64String([IO.File]::ReadAllBytes($overrideFile))
+$uninstalledBackupCount = @(Get-ChildItem -LiteralPath (Join-Path $testCodex 'backups') -Directory).Count
+& $installer -Action Uninstall -CodexDirectory $testCodex
+Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile)) -ceq $uninstalledConfigBytes) 'Repeated uninstall leaves configuration identical'
+Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile)) -ceq $uninstalledAgentsBytes) 'Repeated uninstall leaves base instructions identical'
+Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($overrideFile)) -ceq $uninstalledOverrideBytes) 'Repeated uninstall leaves user override identical'
+Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $testCodex 'backups') -Directory).Count -eq $uninstalledBackupCount) 'Repeated uninstall creates no unnecessary backup'
 
 $conflictConfig = $originalConfig + "`r`n[mcp_servers.antigravity_delegate]`r`ncommand = `"user-owned`""
 [IO.File]::WriteAllText($configFile, $conflictConfig, $utf8)

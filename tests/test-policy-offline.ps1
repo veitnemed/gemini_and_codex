@@ -18,6 +18,11 @@ New-Item -ItemType Directory -Force -Path $mockBridgeDir | Out-Null
 $mockServer = Join-Path $mockBridgeDir 'server.cjs'
 [IO.File]::WriteAllText($mockServer, '// mock server bundle', $utf8)
 
+$mockLunaDir = Join-Path $testCodex 'tools\luna-bridge'
+New-Item -ItemType Directory -Force -Path $mockLunaDir | Out-Null
+$mockLunaServer = Join-Path $mockLunaDir 'server.cjs'
+[IO.File]::WriteAllText($mockLunaServer, '// mock luna server bundle', $utf8)
+
 $configFile = Join-Path $testCodex 'config.toml'
 $agentsFile = Join-Path $testCodex 'AGENTS.md'
 $overrideFile = Join-Path $testCodex 'AGENTS.override.md'
@@ -53,39 +58,40 @@ try {
     & $installer -Action Enable -CodexDirectory $testCodex
     $status = & $installer -Action Status -CodexDirectory $testCodex
     Assert-True ($status.Enabled -and $status.InstructionsInstalled) 'Default installation enables MCP and installs policy'
+    Assert-True ($status.LunaRegistered -and $status.LunaEnabled -and $status.LunaPresent) 'Status shows LunaRegistered, LunaEnabled, and LunaPresent after Enable'
 
     $policy = [IO.File]::ReadAllText($agentsFile)
 
     # Check strict supervisor / implementation owner
-    Assert-True ($policy.Contains('Strict Antigravity Supervisor Mode')) 'Policy contains header Strict Antigravity Supervisor Mode'
-    Assert-True ($policy -match 'Codex is the supervisor' -and $policy -match 'implementation\s+owner') 'Policy defines Codex as supervisor and Gemini as implementation owner'
+    Assert-True ($policy.Contains('Strict Antigravity & Luna Supervisor Mode')) 'Policy contains header Strict Antigravity & Luna Supervisor Mode'
+    Assert-True ($policy -match 'Codex is the supervisor' -and $policy -match 'executors') 'Policy defines Codex as supervisor and executors'
     Assert-True ($policy -match 'Codex must NOT perform routine project investigation,\s*file editing,\s*implementation,\s*or testing') 'Policy forbids Codex from routine investigation, editing, implementation, or testing'
-    Assert-True ($policy -match 'Strict orchestrator mode applies:\s*delegate even\s*initial project discovery') 'Policy mandates delegating initial discovery and substantive tasks'
+    Assert-True ($policy -match 'Strict orchestrator mode applies:\s*direct\s*execution of project tasks by the Codex supervisor is prohibited') 'Policy mandates strict orchestrator mode prohibiting direct project execution'
+
+    # Check worker leaf contract and Luna capacity / reasoning
+    Assert-True ($policy -match 'Worker contract for child Codex CLI \(leaf executor\):[\s\S]*?acts as a leaf executor[\s\S]*?must\s+NEVER delegate further') 'Policy defines worker leaf executor contract forbidding further delegation'
+    Assert-True ($policy -match 'No false promises of a separate quota') 'Policy clarifies Luna quota reality'
+    Assert-True ($policy -match 'luna_delegate\s+mode=plan\s+reasoningEffort=max') 'Policy specifies Luna delegation via mode=plan reasoningEffort=max'
 
     # Check model defaults and reasoning levels
     Assert-True ($policy.Contains('gemini-3.8-flash-low')) 'Policy exposes gemini-3.8-flash-low default for fast/bounded tasks'
     Assert-True ($policy.Contains('gemini-3.8-flash-high')) 'Policy exposes gemini-3.8-flash-high default for serious tasks'
-    Assert-True ($policy -match 'Model selection:\s*use\s+\S+\s+for all mechanical commands[\s\S]*?use\s+\S+\s+strictly for substantive reasoning') 'Policy enforces Low-for-mechanical and High-for-reasoning rule'
+    Assert-True ($policy -match 'Model selection:\s*use\s+\S+\s+for mechanical commands[\s\S]*?use\s+\S+\s+strictly for complex analysis') 'Policy enforces Low-for-mechanical and High-for-analysis rule'
     Assert-True ($policy -match 'Named\s+reasoning\s+levels\s+are\s+selected\s+strictly\s+through\s+model\s+name\s+variants[\s\S]*?never\s+invent\s+parameters\s+for\s+agy_delegate') 'Policy clarifies reasoning levels use model variants without inventing MCP flags'
-    Assert-True ($policy -match 'agy_delegate,\s*which only accepts model,\s*mode,\s*outputFormat,\s*timeoutSeconds,\s*cwd,\s*prompt,\s*agent') 'Policy restricts delegation parameters to supported MCP arguments'
 
     # Check atomic operations / decomposition
     Assert-True ($policy -match 'Decomposition & Scope:\s*one Antigravity delegation\s*=\s*one bounded logical operation') 'Policy enforces atomic-operation decomposition'
 
     # Check execution modes
-    Assert-True ($policy -match 'mode=plan is execution mode for analysis,\s*research,\s*file discovery[\s\S]*?not a model or reasoning level') 'Policy defines mode=plan as execution mode for analysis/proposals without edits'
-    Assert-True ($policy -match 'mode=accept-edits is\s+for implementation and file modifications') 'Policy defines mode=accept-edits for authorized modifications'
+    Assert-True ($policy -match 'mode=plan for analysis,\s*research,\s*file discovery') 'Policy defines mode=plan for analysis/proposals without edits'
+    Assert-True ($policy -match 'mode=accept-edits for implementation and file modifications') 'Policy defines mode=accept-edits for authorized modifications'
 
-    # Check narrow technical exception & no silent fallback
-    Assert-True ($policy -match 'only if Gemini demonstrably cannot execute a technical action[\s\S]*?No silent fallback') 'Policy restricts Codex actions to narrow demonstrable blockers with no silent fallback'
+    # Check Luna executor visible MCP tools
+    Assert-True ($policy -match 'Call Luna strictly through visible MCP tools luna_check\s*/\s*luna_delegate,\s*NEVER via hidden\s*shell commands') 'Policy requires Luna to be called via visible MCP tools luna_check/luna_delegate'
 
     # Check offline / disabled MCP behavior
-    Assert-True ($policy -match 'When agy_delegate is unavailable or disabled:[\s\S]*?Report that execution is unavailable') 'Policy directs supervisor to report execution unavailable when MCP is off'
-    Assert-True ($policy -match 'Do NOT silently launch agy through shell commands[\s\S]*?do NOT perform project investigation') 'Policy forbids supervisor shell launch or manual takeover when MCP is off'
-
-    # Check reporting and learning constraints
-    Assert-True ($policy -match 'actual tool calls and task count vs retries[\s\S]*?duration when supplied') 'Policy requires reporting tool calls, task counts vs retries, and duration'
-    Assert-True ($policy -match 'preserve user intellectual work in educational projects[\s\S]*?must not solve or disclose exercises') 'Policy preserves educational and learning constraints'
+    Assert-True ($policy -match 'When delegation tools are unavailable or disabled:[\s\S]*?Report that execution is unavailable') 'Policy directs supervisor to report execution unavailable when delegation tools are off'
+    Assert-True ($policy -match 'Do NOT silently launch agy or codex through shell commands[\s\S]*?do NOT perform project investigation') 'Policy forbids supervisor shell launch or manual takeover when delegation tools are off'
 
     # Check original user rules preserved
     Assert-True ($policy.EndsWith($originalAgents)) 'Original user instructions are preserved at the end of AGENTS.md'
@@ -106,13 +112,30 @@ try {
     # 5. Test Disable removes managed policy and restores exact original file
     & $installer -Action Disable -CodexDirectory $testCodex
     $disabledStatus = & $installer -Action Status -CodexDirectory $testCodex
-    Assert-True (-not $disabledStatus.Enabled -and -not $disabledStatus.InstructionsInstalled) 'Disable deactivates MCP and removes instructions'
+    Assert-True (-not $disabledStatus.Enabled -and -not $disabledStatus.LunaEnabled -and -not $disabledStatus.InstructionsInstalled) 'Disable deactivates both MCP sections and removes instructions'
     Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile)) -ceq $origAgentsBytes) 'Disable restores exact original AGENTS.md bytes'
 
-    # 6. Test Uninstall restores exact original files
+    # 6. Test Uninstall restores exact original files and removes managed Luna file
     & $installer -Action Uninstall -CodexDirectory $testCodex
+    Assert-True (-not (Test-Path -LiteralPath $mockLunaServer -PathType Leaf)) 'Uninstall removes managed Luna server file'
     Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($configFile)) -ceq $origConfigBytes) 'Uninstall restores exact original config.toml bytes'
     Assert-True ([Convert]::ToBase64String([IO.File]::ReadAllBytes($agentsFile)) -ceq $origAgentsBytes) 'Uninstall restores exact original AGENTS.md bytes'
+
+    # 7. Test unmanaged [mcp_servers.luna_bridge] conflict
+    $unmanagedConfig = $originalConfig + "`r`n`r`n[mcp_servers.luna_bridge]`r`ncommand = `"node`"`r`n"
+    [IO.File]::WriteAllText($configFile, $unmanagedConfig, $utf8)
+    New-Item -ItemType Directory -Force -Path $mockLunaDir | Out-Null
+    [IO.File]::WriteAllText($mockLunaServer, '// mock luna server bundle', $utf8)
+    $conflictFailed = $false
+    try {
+        & $installer -Action Enable -CodexDirectory $testCodex
+    } catch {
+        if ($_.Exception.Message -match 'unmanaged luna_bridge table already exists') {
+            $conflictFailed = $true
+        }
+    }
+    Assert-True $conflictFailed 'Enable fails with clear error when unmanaged [mcp_servers.luna_bridge] exists'
+    [IO.File]::WriteAllText($configFile, $originalConfig, $utf8)
 
     Write-Host 'All offline policy tests PASSED successfully.'
 } finally {

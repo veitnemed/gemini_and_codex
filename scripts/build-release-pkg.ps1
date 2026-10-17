@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$')]
-    [string]$Version = 'v1.0.0'
+    [string]$Version = 'v1.1.0',
+    [string]$OutputDirectory = $null
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,7 +14,7 @@ $scriptDir = $PSScriptRoot
 if (-not $scriptDir) { $scriptDir = (Get-Location).ProviderPath }
 $repoRoot = (Resolve-Path (Join-Path $scriptDir '..')).ProviderPath
 
-$targetDir = Join-Path $repoRoot "dist\$Version"
+$targetDir = if ($OutputDirectory) { $OutputDirectory } else { Join-Path $repoRoot "dist\$Version" }
 $zipName = "gemini-codex-setup-$Version.zip"
 $zipPath = Join-Path $targetDir $zipName
 $shaPath = Join-Path $targetDir 'SHA256.txt'
@@ -40,7 +41,7 @@ if (-not (Test-SubPath $repoRoot $stagingDir)) {
 # Determine allowed files
 $allowedFiles = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([System.StringComparer]::OrdinalIgnoreCase)
 
-$rootFiles = @('setup-antigravity.ps1', 'start.cmd', 'README.md', 'STABILITY.md')
+$rootFiles = @('setup-antigravity.ps1', 'start.cmd', 'README.md', 'STABILITY.md', 'WORKFLOW_EVAL.md')
 foreach ($rf in $rootFiles) {
     $src = Join-Path $repoRoot $rf
     if (Test-Path -LiteralPath $src -PathType Leaf) {
@@ -48,6 +49,12 @@ foreach ($rf in $rootFiles) {
     } else {
         throw "Required source file missing: $src"
     }
+}
+
+$releaseNotesFile = "RELEASE_NOTES_$Version.md"
+$releaseNotesSrc = Join-Path $repoRoot $releaseNotesFile
+if (Test-Path -LiteralPath $releaseNotesSrc -PathType Leaf) {
+    $allowedFiles.Add($releaseNotesFile, $releaseNotesSrc)
 }
 
 $collectSubdir = {
@@ -66,6 +73,14 @@ $collectSubdir = {
 
 & $collectSubdir 'scripts' @('.cjs', '.ps1')
 & $collectSubdir 'tests' @('.cjs', '.ps1')
+
+$lunaBridgeRel = 'tools/luna-bridge/server.cjs'
+$lunaBridgeSrc = Join-Path $repoRoot ($lunaBridgeRel.Replace('/', '\'))
+if (Test-Path -LiteralPath $lunaBridgeSrc -PathType Leaf) {
+    $allowedFiles.Add($lunaBridgeRel, $lunaBridgeSrc)
+} else {
+    throw "Required source file missing: $lunaBridgeSrc"
+}
 
 # Check if target ZIP already exists
 if (Test-Path -LiteralPath $zipPath) {
@@ -115,6 +130,17 @@ if (Test-Path -LiteralPath $zipPath) {
     }
 
     $existingHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
+    $expectedSidecarContent = "$existingHash  $zipName"
+
+    if (Test-Path -LiteralPath $shaPath) {
+        $existingShaContent = (Get-Content -LiteralPath $shaPath -Raw).Trim()
+        if ($existingShaContent -ne $expectedSidecarContent.Trim()) {
+            throw "Existing SHA256 sidecar '$shaPath' does not match verified archive hash. Cannot overwrite existing release."
+        }
+    } else {
+        $expectedSidecarContent | Out-File -LiteralPath $shaPath -Encoding utf8 -NoNewline
+    }
+
     Write-Output "EXISTING_VERIFIED: $zipPath"
     Write-Output "SHA256: $existingHash"
     Write-Output "ENTRIES: $($allowedFiles.Count)"

@@ -1,3 +1,4 @@
 .test-runs/
 dist/
 logs/
+.codex-remote-attachments/

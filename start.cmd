@@ -1,16 +1,11 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-echo [1/2] Installing or updating the delegation configuration...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-antigravity.ps1" -Action Install
-if errorlevel 1 goto failed
-echo [2/2] Running one real Antigravity task through MCP...
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-antigravity.ps1" -Action Test
-if errorlevel 1 goto failed
-echo Ready. Restart the Codex extension and open a new chat.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\menu.ps1"
+set MENU_EXIT=%ERRORLEVEL%
+if %MENU_EXIT% neq 0 (
+    echo.
+    echo Menu session ended with error code %MENU_EXIT%.
+)
 pause
-exit /b 0
-:failed
-echo Setup or live verification FAILED. Read the output above.
-pause
-exit /b 1
+exit /b %MENU_EXIT%
