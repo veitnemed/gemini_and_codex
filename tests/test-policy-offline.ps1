@@ -62,16 +62,17 @@ try {
 
     $policy = [IO.File]::ReadAllText($agentsFile)
 
-    # Check strict supervisor / implementation owner
-    Assert-True ($policy.Contains('Strict Antigravity & Luna Supervisor Mode')) 'Policy contains header Strict Antigravity & Luna Supervisor Mode'
-    Assert-True ($policy -match 'Codex is the supervisor' -and $policy -match 'executors') 'Policy defines Codex as supervisor and executors'
-    Assert-True ($policy -match 'Codex must NOT perform routine project investigation,\s*file editing,\s*implementation,\s*or testing') 'Policy forbids Codex from routine investigation, editing, implementation, or testing'
-    Assert-True ($policy -match 'Strict orchestrator mode applies:\s*direct\s*execution of project tasks by the Codex supervisor is prohibited') 'Policy mandates strict orchestrator mode prohibiting direct project execution'
+    # Check development workflow and authorized direct fallback
+    Assert-True ($policy.Contains('Codex, Antigravity & Luna Development Workflow')) 'Policy contains development workflow header'
+    Assert-True ($policy -match 'Codex coordinates work and independently verifies delegated results') 'Policy defines Codex coordination and independent verification'
+    Assert-True ($policy -match 'investigate, edit, and test directly when the user requests it or an executor is\s*blocked or unavailable') 'Policy permits direct work when requested or executor is blocked'
 
     # Check worker leaf contract and Luna capacity / reasoning
     Assert-True ($policy -match 'Worker contract for child Codex CLI \(leaf executor\):[\s\S]*?acts as a leaf executor[\s\S]*?must\s+NEVER delegate further') 'Policy defines worker leaf executor contract forbidding further delegation'
     Assert-True ($policy -match 'No false promises of a separate quota') 'Policy clarifies Luna quota reality'
     Assert-True ($policy -match 'luna_delegate\s+mode=plan\s+reasoningEffort=max') 'Policy specifies Luna delegation via mode=plan reasoningEffort=max'
+    Assert-True ($policy -match 'Luna may use luna_delegate mode=accept-edits') 'Policy permits Luna implementation in accept-edits mode'
+    Assert-True ($policy -match 'full filesystem and command access' -and $policy -match 'mode=plan remains read-only') 'Policy separates Luna edit access from read-only plan mode'
 
     # Check model defaults and reasoning levels
     Assert-True ($policy.Contains('gemini-3.8-flash-low')) 'Policy exposes gemini-3.8-flash-low default for fast/bounded tasks'
@@ -90,8 +91,9 @@ try {
     Assert-True ($policy -match 'Call Luna strictly through visible MCP tools luna_check\s*/\s*luna_delegate,\s*NEVER via hidden\s*shell commands') 'Policy requires Luna to be called via visible MCP tools luna_check/luna_delegate'
 
     # Check offline / disabled MCP behavior
-    Assert-True ($policy -match 'When delegation tools are unavailable or disabled:[\s\S]*?Report that execution is unavailable') 'Policy directs supervisor to report execution unavailable when delegation tools are off'
-    Assert-True ($policy -match 'Do NOT silently launch agy or codex through shell commands[\s\S]*?do NOT perform project investigation') 'Policy forbids supervisor shell launch or manual takeover when delegation tools are off'
+    Assert-True ($policy -match 'When delegation tools are unavailable or disabled:[\s\S]*?Do not launch agy or codex through hidden shell commands') 'Policy forbids hidden CLI delegation when tools are off'
+    Assert-True ($policy -match 'Codex may use its own standard tools for the user.s task') 'Policy permits visible direct fallback when delegation tools are off'
+    Assert-True ($policy -match 'If the user disables Antigravity or its API is blocked, do not call it again for that task') 'Policy respects task-specific Antigravity disablement'
 
     # Check original user rules preserved
     Assert-True ($policy.EndsWith($originalAgents)) 'Original user instructions are preserved at the end of AGENTS.md'

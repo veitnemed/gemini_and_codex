@@ -38,13 +38,13 @@ Assert-True ($installedConfig.StartsWith($originalConfig)) 'Original TOML root k
 Assert-True ($installedConfig.Contains('[mcp_servers.luna_bridge]')) 'Config registers luna_bridge MCP server'
 Assert-True ([IO.File]::ReadAllText($agentsFile).EndsWith($originalAgents)) 'Original instructions are preserved'
 $defaultAgents = [IO.File]::ReadAllText($agentsFile)
-Assert-True ($defaultAgents -match 'Strict Antigravity & Luna Supervisor Mode' -and $defaultAgents -match 'Codex is the supervisor' -and $defaultAgents -match 'executors') 'Policy establishes strict supervisor and executors'
-Assert-True ($defaultAgents -match 'Antigravity \(Gemini\) and Luna are implementation\s+executors') 'Policy defines Gemini and Luna as implementation executors'
+Assert-True ($defaultAgents -match 'Codex, Antigravity & Luna Development Workflow' -and $defaultAgents -match 'Codex coordinates work and independently verifies delegated results') 'Policy establishes development workflow and independent verification'
+Assert-True ($defaultAgents -match 'investigate, edit, and test directly when the user requests it or an executor is\s*blocked or unavailable') 'Policy permits direct work when requested or executor is blocked'
 Assert-True ($defaultAgents -match 'visible MCP tools luna_check\s*/\s*luna_delegate') 'Policy requires Luna to be called via visible MCP tools'
 Assert-True ($defaultAgents.Contains('gemini-3.8-flash-low') -and $defaultAgents.Contains('gemini-3.8-flash-high')) 'Policy includes both low and high model defaults'
 Assert-True ($defaultAgents -match 'mode=plan' -and $defaultAgents -match 'mode=accept-edits') 'Policy defines plan and accept-edits execution modes'
-Assert-True ($defaultAgents -match 'direct\s+execution of project tasks by the Codex supervisor is prohibited' -and $defaultAgents -match 'do not silently fall back') 'Policy prohibits direct execution by supervisor and forbids silent fallback'
-Assert-True ($defaultAgents -match 'unavailable or disabled' -and $defaultAgents -match 'execution is unavailable') 'Policy instructs supervisor to report execution unavailable when MCP is off or unavailable'
+Assert-True ($defaultAgents -match 'Luna may use luna_delegate mode=accept-edits' -and $defaultAgents -match 'full filesystem and command access' -and $defaultAgents -match 'mode=plan remains read-only') 'Policy permits Luna edits while keeping plan read-only'
+Assert-True ($defaultAgents -match 'Do not launch agy or codex through hidden shell commands' -and $defaultAgents -match 'Codex may use its own standard tools') 'Policy permits direct fallback without hidden delegation'
 Assert-True ($defaultAgents -match 'Worker contract for child Codex CLI \(leaf executor\)' -and $defaultAgents -match 'NEVER delegate further') 'Policy establishes child Codex leaf executor contract'
 Assert-True ($defaultAgents -match 'No false promises of a separate quota') 'Policy clarifies Luna quota reality'
 Assert-True ($defaultAgents.EndsWith($originalAgents)) 'Original user instructions and restrictions are preserved'
@@ -124,7 +124,7 @@ $originalOverride = '# User override' + "`n" + '- Keep this override.'
 & $installer -Action Enable -CodexDirectory $testCodex
 $status = & $installer -Action Status -CodexDirectory $testCodex
 Assert-True ($status.EffectiveInstructions -eq $overrideFile -and $status.InstructionsInstalled) 'Nonempty global override receives the rule'
-Assert-True ([IO.File]::ReadAllText($overrideFile).Contains('Strict Antigravity & Luna Supervisor Mode')) 'Override instructions receive strict supervisor policy'
+Assert-True ([IO.File]::ReadAllText($overrideFile).Contains('Codex, Antigravity & Luna Development Workflow')) 'Override instructions receive development workflow policy'
 Assert-True ([IO.File]::ReadAllText($agentsFile) -ceq $originalAgents) 'Old managed rule removed from base instructions'
 
 & $installer -Action Uninstall -CodexDirectory $testCodex

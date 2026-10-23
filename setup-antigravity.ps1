@@ -269,14 +269,11 @@ $configEnd
     if ($Action -ne 'Disable') {
         $prompt = @"
 $promptBegin
-## Strict Antigravity & Luna Supervisor Mode
+## Codex, Antigravity & Luna Development Workflow
 
-Codex is the supervisor / orchestrator; Antigravity (Gemini) and Luna are implementation
-executors. Codex assigns tasks, evaluates reports, and directs follow-ups.
-Codex must NOT perform routine project investigation, file editing, implementation,
-or testing itself instead of executors. Strict orchestrator mode applies: direct
-execution of project tasks by the Codex supervisor is prohibited except for narrow
-independent verification of artifacts.
+Codex coordinates work and independently verifies delegated results. It may also
+investigate, edit, and test directly when the user requests it or an executor is
+blocked or unavailable. State that fallback plainly and verify the actual files.
 
 Worker contract for child Codex CLI (leaf executor):
 - When a child Codex CLI receives a worker prompt from luna_bridge, it acts as a leaf executor:
@@ -287,11 +284,13 @@ Quota and capacity reality:
 - No false promises of a separate quota: Luna operates under the same Codex account / usage limits.
 
 Routing & Delegation Policy:
-- Luna delegation (Deep Planning & Read-Only Analysis):
+- Luna delegation (Planning & Implementation):
   - Delegate substantial multi-step or complex planning, architecture design, and read-only analysis
     to Luna via luna_delegate mode=plan reasoningEffort=max.
   - Do NOT require Luna before every trivial task.
-  - Luna must NOT edit files in this workflow (strictly read-only / mode=plan).
+  - For user-authorized implementation, Luna may use luna_delegate mode=accept-edits.
+    The development bridge gives that mode full filesystem and command access;
+    mode=plan remains read-only. Keep each prompt scoped to the requested work.
   - Call Luna strictly through visible MCP tools luna_check / luna_delegate, NEVER via hidden shell commands.
 - Antigravity delegation (Mechanical Execution & Bounded Tasks):
   - Call agy_check before the first Antigravity delegation.
@@ -299,6 +298,7 @@ Routing & Delegation Policy:
   - Named reasoning levels are selected strictly through model name variants (e.g. -low, -high); never invent parameters for agy_delegate.
   - Decomposition & Scope: one Antigravity delegation = one bounded logical operation, typically 1-3 tool calls.
   - Execution mode: mode=plan for analysis, research, file discovery, and proposals without edits; mode=accept-edits for implementation and file modifications authorized by the user.
+  - If the user disables Antigravity or its API is blocked, do not call it again for that task.
 
 Handoff & Context Documentation:
 - No automatic context.md per task.
@@ -308,11 +308,13 @@ Coordination and safety:
 - Pre-call notice: before each delegation (Gemini or Luna), briefly state the task and chosen model / reasoning effort to the user.
 - Post-call reporting: report actual completed/failed status, tool calls, and duration as returned by the tool.
 - Independent verification: Codex supervisor independently verifies generated artifacts and diffs.
-- No concurrent edits: never allow Gemini and Luna (or any two delegations) to modify the same files concurrently.
-- Fallback restriction: if an executor fails, retry at most once with a concrete fix or report the blocker; do not silently fall back to Codex implementing the project task.
+- No concurrent edits: never allow two agents or delegations to modify the same files concurrently.
+- If an executor fails, try a concrete correction when useful, then report the blocker.
+  Codex may continue directly using available tools; make the handoff visible.
 
 When delegation tools are unavailable or disabled:
-- Report that execution is unavailable. Do NOT silently launch agy or codex through shell commands and do NOT perform project investigation, editing, implementation, or testing directly. Codex supervisor may still converse and analyze information already provided in context.
+- Do not launch agy or codex through hidden shell commands to mimic delegation.
+  Codex may use its own standard tools for the user's task and report what was verified.
 
 Project instructions and user requests take precedence.
 $promptEnd

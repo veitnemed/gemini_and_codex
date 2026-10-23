@@ -5,6 +5,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 
+function codexCommand(binaryPath, args) {
+  if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(binaryPath)) {
+    return { file: binaryPath, args, options: {} };
+  }
+  // cmd.exe needs verbatim outer quotes when a batch file lives under a path with spaces.
+  // Every argument here is a bridge-owned CLI token, never text from the task prompt.
+  if (/[\"%!]/.test(binaryPath) || !args.every(arg => /^[A-Za-z0-9_.=/-]+$/.test(arg))) {
+    throw new Error('Unsafe Windows batch path or Codex argument.');
+  }
+  return {
+    file: process.env.ComSpec || 'cmd.exe',
+    args: ['/d', '/s', '/c', `""${binaryPath}" ${args.join(' ')}"`],
+    options: { windowsVerbatimArguments: true }
+  };
+}
+
 function sanitizeSecrets(text) {
   if (typeof text !== 'string') return '';
   return text
@@ -93,10 +109,8 @@ function handleLunaCheck() {
       windowsHide: true,
       env: process.env
     };
-    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(binaryPath)) {
-      spawnOptions.shell = true;
-    }
-    const vRes = spawnSync(binaryPath, ['--version'], spawnOptions);
+    const command = codexCommand(binaryPath, ['--version']);
+    const vRes = spawnSync(command.file, command.args, { ...spawnOptions, ...command.options });
     if (vRes.error) {
       versionError = vRes.error.message;
     } else if (vRes.status !== 0) {
@@ -118,10 +132,8 @@ function handleLunaCheck() {
       windowsHide: true,
       env: process.env
     };
-    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(binaryPath)) {
-      spawnOptions.shell = true;
-    }
-    const aRes = spawnSync(binaryPath, ['login', 'status'], spawnOptions);
+    const command = codexCommand(binaryPath, ['login', 'status']);
+    const aRes = spawnSync(command.file, command.args, { ...spawnOptions, ...command.options });
     const rawOutput = ((aRes.stdout || '') + (aRes.stderr || '')).trim();
     const sanitizedOutput = sanitizeSecrets(rawOutput);
     if (aRes.error) {
@@ -409,7 +421,7 @@ async function executeLuna(args) {
     };
   }
 
-  const sandboxMode = mode === 'accept-edits' ? 'workspace-write' : 'read-only';
+  const sandboxMode = mode === 'accept-edits' ? 'danger-full-access' : 'read-only';
 
   const cliArgs = [
     'exec',
@@ -419,6 +431,7 @@ async function executeLuna(args) {
     '-c', 'agents.enabled=false',
     '-c', 'approval_policy=never',
     '--sandbox', sandboxMode,
+    '--skip-git-repo-check',
     '--ephemeral',
     '-'
   ];
@@ -429,7 +442,7 @@ async function executeLuna(args) {
   };
 
   const workerPrompt = mode === 'accept-edits'
-    ? `[Worker Instruction: You are operating as a terminal Luna worker via luna-bridge. You have a comprehensive multi-step task and may perform multiple steps, tool calls, and local workspace file edits to complete it. Do NOT attempt further delegation, and do NOT invoke Codex CLI or agy.]\n\n${prompt}`
+    ? `[Worker Instruction: You are operating as a terminal Luna worker via luna-bridge. You have a comprehensive multi-step task and may perform multiple steps, tool calls, and filesystem edits within the user's requested scope to complete it. Do NOT attempt further delegation, and do NOT invoke Codex CLI or agy.]\n\n${prompt}`
     : `[Worker Instruction: You are operating as a terminal Luna worker via luna-bridge in read-only plan mode. You have a comprehensive multi-step task and may perform multiple analysis steps and tool calls to complete it, but file edits are prohibited. Do NOT attempt further delegation, and do NOT invoke Codex CLI or agy.]\n\n${prompt}`;
 
   const startTime = Date.now();
@@ -446,11 +459,8 @@ async function executeLuna(args) {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
     };
-    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(binaryPath)) {
-      spawnOptions.shell = true;
-    }
-
-    const child = spawn(binaryPath, cliArgs, spawnOptions);
+    const command = codexCommand(binaryPath, cliArgs);
+    const child = spawn(command.file, command.args, { ...spawnOptions, ...command.options });
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -608,7 +618,7 @@ async function handleLine(line) {
           },
           {
             name: 'luna_delegate',
-            description: 'Executes codex exec with GPT-6 Luna in plan (read-only) or accept-edits (workspace-write) mode.',
+            description: 'Executes codex exec with GPT-6 Luna in plan (read-only) or accept-edits (danger-full-access) mode.',
             inputSchema: {
               type: 'object',
               properties: {
@@ -624,7 +634,7 @@ async function handleLine(line) {
                   type: 'string',
                   enum: ['plan', 'accept-edits'],
                   default: 'plan',
-                  description: 'Execution mode: "plan" (read-only) or "accept-edits" (workspace-write).'
+                  description: 'Execution mode: "plan" (read-only) or "accept-edits" (danger-full-access).'
                 },
                 reasoningEffort: {
                   type: 'string',
