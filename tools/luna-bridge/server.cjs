@@ -3,7 +3,21 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
+
+const MODEL = 'gpt-6-luna';
+const PROFILES = Object.freeze({
+  fast: Object.freeze({ key: 'fast', effort: 'medium', serverName: 'luna-fast' }),
+  think: Object.freeze({ key: 'think', effort: 'max', serverName: 'luna-think' }),
+  plan: Object.freeze({ key: 'plan', effort: 'high', serverName: 'luna-plan' })
+});
+const requestedProfile = require.main ? process.argv[2] : undefined;
+const PROFILE = PROFILES[requestedProfile || 'think'] || PROFILES.think;
+const CHECK_TOOL = `luna_${PROFILE.key}_check`;
+const DELEGATE_TOOL = `luna_${PROFILE.key}_delegate`;
+const READ_TOOL = `luna_${PROFILE.key}_read`;
 
 function codexCommand(binaryPath, args) {
   if (process.platform !== 'win32' || !/\.(cmd|bat)$/i.test(binaryPath)) {
@@ -196,6 +210,75 @@ function killProcessTree(pid) {
 
 let isExecuting = false;
 
+const codexHome = path.resolve(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'));
+const leaseRoot = path.join(os.tmpdir(), 'luna-orchestrator-' +
+  crypto.createHash('sha256').update(codexHome.toLowerCase()).digest('hex').slice(0, 20));
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code !== 'ESRCH'; }
+}
+
+function clearStaleLease(directory) {
+  const ownerPath = path.join(directory, 'owner.json');
+  try {
+    const stat = fs.statSync(directory);
+    const ownerText = fs.existsSync(ownerPath) ? fs.readFileSync(ownerPath, 'utf8') : null;
+    if (!ownerText) {
+      if (Date.now() - stat.mtimeMs > 5000) fs.rmdirSync(directory);
+      return;
+    }
+    const owner = JSON.parse(ownerText);
+    const tooOld = Date.now() - owner.startedAt > 35 * 60 * 1000;
+    if (processAlive(owner.pid) && !tooOld) return;
+    if (fs.readFileSync(ownerPath, 'utf8') !== ownerText) return;
+    fs.unlinkSync(ownerPath);
+    fs.rmdirSync(directory);
+  } catch (_) {
+    // Another process may own or already have removed this lease.
+  }
+}
+
+function reserveLease(directory) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.mkdirSync(directory);
+      const ownerPath = path.join(directory, 'owner.json');
+      const token = crypto.randomUUID();
+      const ownerText = JSON.stringify({ pid: process.pid, startedAt: Date.now(), token });
+      fs.writeFileSync(ownerPath, ownerText, { flag: 'wx' });
+      return () => {
+        try {
+          if (fs.readFileSync(ownerPath, 'utf8') === ownerText) {
+            fs.unlinkSync(ownerPath);
+            fs.rmdirSync(directory);
+          }
+        } catch (_) {}
+      };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      clearStaleLease(directory);
+    }
+  }
+  return null;
+}
+
+function acquireLunaLease(editing) {
+  fs.mkdirSync(leaseRoot, { recursive: true });
+  let releaseSlot = null;
+  for (let slot = 0; slot < 2 && !releaseSlot; slot++) {
+    releaseSlot = reserveLease(path.join(leaseRoot, `slot-${slot}`));
+  }
+  if (!releaseSlot) return { error: 'Two Luna delegates are already running.' };
+  const releaseWriter = editing ? reserveLease(path.join(leaseRoot, 'writer')) : null;
+  if (editing && !releaseWriter) {
+    releaseSlot();
+    return { error: 'Another Luna delegate is already editing. Run writers sequentially.' };
+  }
+  return { release: () => { if (releaseWriter) releaseWriter(); releaseSlot(); } };
+}
+
 async function handleLunaDelegate(args) {
   if (isExecuting) {
     return {
@@ -317,8 +400,8 @@ async function executeLuna(args) {
           text: `Error: "mode" must be either "plan" or "accept-edits" (received: ${JSON.stringify(args.mode)}).`
         }],
         structuredContent: {
-          model: 'gpt-6-luna',
-          effort: 'high',
+          model: MODEL,
+          effort: PROFILE.effort,
           mode: String(args.mode),
           taskId: typeof args?.taskId === 'string' ? args.taskId : null,
           exitCode: 1,
@@ -331,27 +414,32 @@ async function executeLuna(args) {
     mode = args.mode;
   }
 
-  let reasoningEffort = 'high';
+  if (PROFILE.key === 'plan' && mode !== 'plan') {
+    return {
+      content: [{ type: 'text', text: 'Error: luna_plan is read-only and accepts only mode="plan".' }],
+      structuredContent: { model: MODEL, effort: PROFILE.effort, mode, exitCode: 1, timedOut: false, durationSeconds: 0 },
+      isError: true
+    };
+  }
+
+  const reasoningEffort = PROFILE.effort;
   if (args?.reasoningEffort !== undefined) {
-    if (args.reasoningEffort !== 'high' && args.reasoningEffort !== 'max') {
-      return {
-        content: [{
-          type: 'text',
-          text: `Error: "reasoningEffort" must be either "high" or "max" (received: ${JSON.stringify(args.reasoningEffort)}).`
-        }],
-        structuredContent: {
-          model: 'gpt-6-luna',
-          effort: String(args.reasoningEffort),
-          mode,
-          taskId: typeof args?.taskId === 'string' ? args.taskId : null,
-          exitCode: 1,
-          timedOut: false,
-          durationSeconds: 0
-        },
-        isError: true
-      };
-    }
-    reasoningEffort = args.reasoningEffort;
+    return {
+      content: [{
+        type: 'text',
+        text: `Error: reasoningEffort is fixed to "${reasoningEffort}" by the ${PROFILE.key} profile and cannot be supplied.`
+      }],
+      structuredContent: {
+        model: MODEL,
+        effort: reasoningEffort,
+        mode,
+        taskId: typeof args?.taskId === 'string' ? args.taskId : null,
+        exitCode: 1,
+        timedOut: false,
+        durationSeconds: 0
+      },
+      isError: true
+    };
   }
 
   let taskId = null;
@@ -363,7 +451,7 @@ async function executeLuna(args) {
           text: 'Error: "taskId" if provided must be a non-empty string.'
         }],
         structuredContent: {
-          model: 'gpt-6-luna',
+          model: MODEL,
           effort: reasoningEffort,
           mode,
           taskId: null,
@@ -387,7 +475,7 @@ async function executeLuna(args) {
           text: `Error: "timeoutSeconds" must be an integer between 1 and 1800 (received: ${t}).`
         }],
         structuredContent: {
-          model: 'gpt-6-luna',
+          model: MODEL,
           effort: reasoningEffort,
           mode,
           taskId,
@@ -409,7 +497,7 @@ async function executeLuna(args) {
         text: 'Error: Codex CLI binary not found in PATH or CODEX_CLI_PATH.'
       }],
       structuredContent: {
-        model: 'gpt-6-luna',
+        model: MODEL,
         effort: reasoningEffort,
         mode,
         taskId,
@@ -425,7 +513,7 @@ async function executeLuna(args) {
 
   const cliArgs = [
     'exec',
-    '-m', 'gpt-6-luna',
+    '-m', MODEL,
     '-c', `model_reasoning_effort=${reasoningEffort}`,
     '--ignore-user-config',
     '-c', 'agents.enabled=false',
@@ -446,6 +534,17 @@ async function executeLuna(args) {
     : `[Worker Instruction: You are operating as a terminal Luna worker via luna-bridge in read-only plan mode. You have a comprehensive multi-step task and may perform multiple analysis steps and tool calls to complete it, but file edits are prohibited. Do NOT attempt further delegation, and do NOT invoke Codex CLI or agy.]\n\n${prompt}`;
 
   const startTime = Date.now();
+  let lease;
+  try { lease = acquireLunaLease(mode === 'accept-edits'); }
+  catch (error) { lease = { error: `Could not reserve a Luna slot: ${error.message}` }; }
+  if (lease.error) {
+    return {
+      content: [{ type: 'text', text: `Error: ${lease.error}` }],
+      structuredContent: { model: MODEL, effort: reasoningEffort, mode, taskId,
+        exitCode: 1, timedOut: false, durationSeconds: 0 },
+      isError: true
+    };
+  }
 
   return new Promise((resolve) => {
     let stdout = '';
@@ -460,7 +559,15 @@ async function executeLuna(args) {
       windowsHide: true
     };
     const command = codexCommand(binaryPath, cliArgs);
-    const child = spawn(command.file, command.args, { ...spawnOptions, ...command.options });
+    let child;
+    try { child = spawn(command.file, command.args, { ...spawnOptions, ...command.options }); }
+    catch (error) {
+      lease.release();
+      resolve({ content: [{ type: 'text', text: `Error launching Codex process: ${error.message}` }],
+        structuredContent: { model: MODEL, effort: reasoningEffort, mode, taskId,
+          exitCode: 1, timedOut: false, durationSeconds: 0 }, isError: true });
+      return;
+    }
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -483,6 +590,7 @@ async function executeLuna(args) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      lease.release();
 
       const durationSeconds = Math.max(0, Math.round(((Date.now() - startTime) / 1000) * 100) / 100);
       const actualExitCode = exitCode !== null ? exitCode : (timedOut ? 1 : (err ? 1 : 0));
@@ -520,7 +628,7 @@ async function executeLuna(args) {
           text: outputText
         }],
         structuredContent: {
-          model: 'gpt-6-luna',
+          model: MODEL,
           effort: reasoningEffort,
           mode,
           taskId,
@@ -592,8 +700,8 @@ async function handleLine(line) {
           tools: {}
         },
         serverInfo: {
-          name: 'luna-bridge',
-          version: '1.0.0'
+          name: PROFILE.serverName,
+          version: '2.0.0'
         }
       });
       return;
@@ -608,8 +716,9 @@ async function handleLine(line) {
       sendResult(id, {
         tools: [
           {
-            name: 'luna_check',
-            description: 'Checks Codex CLI availability and login status without making model requests.',
+            name: CHECK_TOOL,
+            description: `Checks Codex CLI availability and login status for the Luna ${PROFILE.key} profile without making model requests.`,
+            annotations: { readOnlyHint: true },
             inputSchema: {
               type: 'object',
               properties: {},
@@ -617,8 +726,11 @@ async function handleLine(line) {
             }
           },
           {
-            name: 'luna_delegate',
-            description: 'Executes codex exec with GPT-6 Luna in plan (read-only) or accept-edits (danger-full-access) mode.',
+            name: DELEGATE_TOOL,
+            description: PROFILE.key === 'plan'
+              ? 'Creates a read-only technical plan with GPT-6 Luna at fixed high reasoning effort.'
+              : `Executes codex exec with GPT-6 Luna at fixed ${PROFILE.effort} reasoning effort in plan (read-only) or accept-edits (danger-full-access) mode.`,
+            ...(PROFILE.key === 'plan' ? { annotations: { readOnlyHint: true } } : {}),
             inputSchema: {
               type: 'object',
               properties: {
@@ -632,15 +744,11 @@ async function handleLine(line) {
                 },
                 mode: {
                   type: 'string',
-                  enum: ['plan', 'accept-edits'],
+                  enum: PROFILE.key === 'plan' ? ['plan'] : ['plan', 'accept-edits'],
                   default: 'plan',
-                  description: 'Execution mode: "plan" (read-only) or "accept-edits" (danger-full-access).'
-                },
-                reasoningEffort: {
-                  type: 'string',
-                  enum: ['high', 'max'],
-                  default: 'high',
-                  description: 'Reasoning effort: "high" or "max".'
+                  description: PROFILE.key === 'plan'
+                    ? 'Read-only planning mode.'
+                    : 'Execution mode: "plan" (read-only) or "accept-edits" (danger-full-access).'
                 },
                 taskId: {
                   type: 'string',
@@ -657,7 +765,23 @@ async function handleLine(line) {
               required: ['prompt', 'cwd'],
               additionalProperties: false
             }
-          }
+          },
+          ...(PROFILE.key === 'plan' ? [] : [{
+            name: READ_TOOL,
+            description: `Runs GPT-6 Luna at fixed ${PROFILE.effort} reasoning effort for read-only investigation. Editing is unavailable through this tool.`,
+            annotations: { readOnlyHint: true },
+            inputSchema: {
+              type: 'object',
+              properties: {
+                prompt: { type: 'string', description: 'Read-only task for the Luna model.' },
+                cwd: { type: 'string', description: 'Existing absolute directory path.' },
+                taskId: { type: 'string', description: 'Optional task identifier for reporting.' },
+                timeoutSeconds: { type: 'integer', minimum: 1, maximum: 1800, default: 300 }
+              },
+              required: ['prompt', 'cwd'],
+              additionalProperties: false
+            }
+          }])
         ]
       });
       return;
@@ -667,14 +791,20 @@ async function handleLine(line) {
       const name = params?.name;
       const callArgs = params?.arguments || {};
 
-      if (name === 'luna_check') {
+      if (name === CHECK_TOOL) {
         const res = handleLunaCheck();
         sendResult(id, res);
         return;
       }
 
-      if (name === 'luna_delegate') {
+      if (name === DELEGATE_TOOL) {
         const res = await handleLunaDelegate(callArgs);
+        sendResult(id, res);
+        return;
+      }
+
+      if (PROFILE.key !== 'plan' && name === READ_TOOL) {
+        const res = await handleLunaDelegate({ ...callArgs, mode: 'plan' });
         sendResult(id, res);
         return;
       }
@@ -693,6 +823,10 @@ async function handleLine(line) {
 }
 
 function startServer() {
+  if (requestedProfile && !Object.prototype.hasOwnProperty.call(PROFILES, requestedProfile)) {
+    process.stderr.write(`Invalid Luna profile "${requestedProfile}". Use "fast", "think", or "plan".\n`);
+    process.exit(1);
+  }
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', chunk => {
     inputBuffer += chunk;
