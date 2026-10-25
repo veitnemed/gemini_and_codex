@@ -3,12 +3,12 @@ param(
     [ValidateSet('Install', 'Status', 'Uninstall')]
     [string]$Action = 'Install',
     [string]$CodexDirectory = $(if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }),
-    [ValidateSet('1.3', '1.2')][string]$WorkflowMode = '1.3'
+    [ValidateSet('1.3', '1.2', 'default')][string]$WorkflowMode = '1.3'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$version = '1.3.0'
+$version = '1.3.1'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 $CodexDirectory = [IO.Path]::GetFullPath($CodexDirectory)
 $configPath = Join-Path $CodexDirectory 'config.toml'
@@ -20,7 +20,7 @@ $nodeTarget = Join-Path $runtimeDirectory 'node.exe'
 $bridgeTarget = Join-Path $runtimeDirectory 'server.cjs'
 $licenseTarget = Join-Path $runtimeDirectory 'LICENSE.node'
 $roleNames = @('luna_fast', 'luna_think', 'luna_plan')
-$activeRoles = if ($WorkflowMode -eq '1.2') { @('luna_think') } else { $roleNames }
+$activeRoles = if ($WorkflowMode -eq '1.2') { @('luna_think') } elseif ($WorkflowMode -eq '1.3') { $roleNames } else { @() }
 $oldMcpBegin = '# >>> gemini-and-codex managed MCP >>>'
 $oldMcpEnd = '# <<< gemini-and-codex managed MCP <<<'
 $oldAgentsBegin = '# >>> gemini-and-codex managed agents >>>'
@@ -106,6 +106,7 @@ function Toml-String([string]$Value) {
 }
 
 function Build-McpBlock {
+    if ($WorkflowMode -eq 'default') { return "$mcpBegin`r`n# workflow-mode=default`r`n$mcpEnd`r`n" }
     $node = Toml-String $nodeTarget
     $bridge = Toml-String $bridgeTarget
     $lines = New-Object 'System.Collections.Generic.List[string]'
@@ -161,7 +162,7 @@ foreach ($role in $roleNames) { $roleTargets[$role] = Join-Path $rolesDirectory 
 if ($Action -eq 'Status') {
     $allEnabled = $true
     $managedMcp = [regex]::Match($configOriginal, '(?ms)^' + [regex]::Escape($mcpBegin) + '\r?\n(.*?)^' + [regex]::Escape($mcpEnd) + '\r?$')
-    $modeMatch = [regex]::Match($managedMcp.Groups[1].Value, '(?m)^# workflow-mode=(1\.3|1\.2)\r?$')
+    $modeMatch = [regex]::Match($managedMcp.Groups[1].Value, '(?m)^# workflow-mode=(1\.3|1\.2|default)\r?$')
     $statusMode = if ($modeMatch.Success) { $modeMatch.Groups[1].Value } else { 'unknown' }
     $activeRoles = if ($statusMode -eq '1.2') { @('luna_think') } elseif ($statusMode -eq '1.3') { $roleNames } else { @() }
     Write-Output "WorkflowMode=$statusMode"
@@ -180,9 +181,23 @@ if ($Action -eq 'Status') {
     $agentsEnabled = $agentTable.Success -and $agentTable.Groups[1].Value -match '(?m)^enabled[ \t]*=[ \t]*true\r?$'
     $twoChildren = $agentTable.Success -and $agentTable.Groups[1].Value -match '(?m)^max_concurrent_threads_per_session[ \t]*=[ \t]*2\r?$'
     $policyInstalled = (Read-Text $effectivePath).Contains($promptBegin)
+    $managedAgentsPresent = $configOriginal.Contains($agentsBegin)
     $runtimePresent = (Test-Path -LiteralPath $nodeTarget -PathType Leaf) -and (Test-Path -LiteralPath $bridgeTarget -PathType Leaf)
-    $allEnabled = $allEnabled -and $statusMode -ne 'unknown' -and $agentsEnabled -and $twoChildren -and $policyInstalled -and $runtimePresent
+    $managedRoleLeftover = $false
+    if ($statusMode -eq 'default') {
+        foreach ($role in $roleNames) {
+            $roleText = Read-Text $roleTargets[$role]
+            if (Test-ManagedRole $roleText) { $managedRoleLeftover = $true }
+        }
+        $defaultMcpClean = $managedMcp.Success -and $managedMcp.Groups[1].Value.Trim() -ceq '# workflow-mode=default'
+        $policyInstalled = ((Read-Text $agentsPath).Contains($promptBegin) -or (Read-Text $overridePath).Contains($promptBegin))
+        $allEnabled = $allEnabled -and $defaultMcpClean -and -not $managedAgentsPresent -and -not $policyInstalled -and -not $managedRoleLeftover
+    } else {
+        $allEnabled = $allEnabled -and $agentsEnabled -and $twoChildren -and $policyInstalled -and $runtimePresent
+    }
+    $allEnabled = $allEnabled -and $statusMode -ne 'unknown'
     Write-Output "PolicyInstalled=$policyInstalled AgentsEnabled=$agentsEnabled MaxChildrenTwo=$twoChildren RuntimePresent=$runtimePresent"
+    if ($statusMode -eq 'default') { Write-Output "DefaultMcpClean=$defaultMcpClean ManagedRoleLeftover=$managedRoleLeftover" }
     Write-Output "Ready=$allEnabled"
     return
 }
@@ -236,13 +251,22 @@ if ($Action -eq 'Install') {
         $existing = Read-Text $target
         if ($existing -and (Test-ManagedRole $existing)) { $changes[$target] = $null }
     }
-    $changes[$configPath] = (Enable-Agents $configClean).TrimEnd("`r", "`n") + "`r`n" + (Build-McpBlock)
-    $policyFile = if ($WorkflowMode -eq '1.2') { Join-Path $PSScriptRoot 'policy\luna-v12.md' } else { $policySource }
-    if (-not (Test-Path -LiteralPath $policyFile -PathType Leaf)) { throw "Installer payload is missing: $policyFile" }
-    $policy = (Read-Text $policyFile).TrimEnd("`r", "`n")
-    $changes[$effectivePath] = "$promptBegin`r`n$policy`r`n$promptEnd`r`n" + $promptChanges[$effectivePath]
-    $otherPath = if ($effectivePath -eq $agentsPath) { $overridePath } else { $agentsPath }
-    $changes[$otherPath] = $promptChanges[$otherPath]
+    $baseConfig = if ($WorkflowMode -eq 'default') { $configClean } else { Enable-Agents $configClean }
+    $changes[$configPath] = $baseConfig.TrimEnd("`r", "`n") + "`r`n" + (Build-McpBlock)
+    if ($WorkflowMode -eq 'default') {
+        foreach ($promptPath in @($agentsPath, $overridePath)) {
+            if ((Test-Path -LiteralPath $promptPath -PathType Leaf) -or $promptChanges[$promptPath]) {
+                $changes[$promptPath] = $promptChanges[$promptPath]
+            }
+        }
+    } else {
+        $policyFile = if ($WorkflowMode -eq '1.2') { Join-Path $PSScriptRoot 'policy\luna-v12.md' } else { $policySource }
+        if (-not (Test-Path -LiteralPath $policyFile -PathType Leaf)) { throw "Installer payload is missing: $policyFile" }
+        $policy = (Read-Text $policyFile).TrimEnd("`r", "`n")
+        $changes[$effectivePath] = "$promptBegin`r`n$policy`r`n$promptEnd`r`n" + $promptChanges[$effectivePath]
+        $otherPath = if ($effectivePath -eq $agentsPath) { $overridePath } else { $agentsPath }
+        $changes[$otherPath] = $promptChanges[$otherPath]
+    }
 } else {
     foreach ($role in $roleNames) {
         $existingRole = Read-Text $roleTargets[$role]

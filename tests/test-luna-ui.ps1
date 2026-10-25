@@ -4,8 +4,8 @@ param([string]$SetupExe = $null, [string]$ScreenshotPath = $null)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (-not $SetupExe) { $SetupExe = Join-Path $repo 'dist\v1.3.0\Luna-Codex-Setup-v1.3.0.exe' }
-if (-not $ScreenshotPath) { $ScreenshotPath = Join-Path $repo 'dist\v1.3.0\Luna-Control-preview.png' }
+if (-not $SetupExe) { $SetupExe = Join-Path $repo 'dist\v1.3.1\Luna-Codex-Setup-v1.3.1.exe' }
+if (-not $ScreenshotPath) { $ScreenshotPath = Join-Path $repo 'dist\v1.3.1\Luna-Control-preview.png' }
 $testDirectory = Join-Path ([IO.Path]::GetTempPath()) ('luna-ui-test-' + [Guid]::NewGuid().ToString('N'))
 $profile = Join-Path $testDirectory 'profile with spaces'
 New-Item -ItemType Directory -Path $profile -Force | Out-Null
@@ -34,9 +34,12 @@ try {
     if (-not $config.Contains('# workflow-mode=1.3') -or -not $config.Contains('model = "gpt-6-sol"')) { throw 'UI did not persist 1.3 or changed root model.' }
     foreach ($role in @('fast', 'plan', 'think')) { if (-not $config.Contains("[mcp_servers.luna_$role]")) { throw "Missing final role: $role" } }
     if (-not $guidance.Contains('Keep my personal instruction.')) { throw 'UI switch lost personal instructions.' }
-    if (-not (Test-Path -LiteralPath $ScreenshotPath -PathType Leaf)) { throw 'UI did not render its screenshot.' }
+    foreach ($suffix in @('', '-1.2', '-default')) {
+        $renderPath = Join-Path ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($ScreenshotPath))) ([IO.Path]::GetFileNameWithoutExtension($ScreenshotPath) + $suffix + [IO.Path]::GetExtension($ScreenshotPath))
+        if (-not (Test-Path -LiteralPath $renderPath -PathType Leaf)) { throw "UI did not render mode screenshot: $renderPath" }
+    }
     $success = $true
-    Write-Output "PASS: real UI buttons switched 1.3 -> 1.2 -> 1.3, persisted default, preserved user settings. Screenshot: $ScreenshotPath"
+    Write-Output "PASS: real UI buttons switched 1.3 -> 1.2 -> default -> 1.3, persisted the final mode, preserved user settings. Screenshot: $ScreenshotPath"
 } finally {
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
     $resolved = [IO.Path]::GetFullPath($testDirectory)

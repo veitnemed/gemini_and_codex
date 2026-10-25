@@ -1,9 +1,12 @@
-# Luna Codex Orchestrator v1.3.0
+# Luna Codex Orchestrator v1.3.1
 
-The EXE carries its own Node.js runtime and offers two persistent workflows: 1.3
+The EXE carries its own Node.js runtime and offers three persistent workflows: 1.3
 (`Fast / Plan / Think`) is the default, while 1.2 (`Luna Max`) is a Luna-only
 compatibility mode, not a reinstall of the older Antigravity release. The root
-model selected by the user remains unchanged. Both modes apply to future chats.
+model selected by the user remains unchanged. Default is ordinary Codex without
+managed Luna routing; it removes the managed policy, MCP entries, and unchanged
+managed roles while restoring prior `[agents]` settings. The runtime stays on
+disk for switching back. All modes apply to future chats.
 The candidate EXE installs three native Codex
 custom agents plus three distinct MCP server registrations. The main Codex model
 is whatever the user selects in the client. The installed global policy asks the
@@ -19,11 +22,12 @@ scoping and verification, and to report which children actually worked.
   `AGENTS.md`: the managed routing policy.
 - `agents/luna_fast.toml`, `agents/luna_think.toml`, `agents/luna_plan.toml`:
   fixed model and effort for native custom agents.
-- `tools/luna-orchestrator/v1.3.0`: Node runtime, MCP bridge, and Node license.
+- `tools/luna-orchestrator/v1.3.1`: Node runtime, MCP bridge, and Node license.
 - Normal global installation also saves `Luna-Control.exe` there and creates a
   `Luna Codex` desktop shortcut. The GUI installs 1.3 automatically on a fresh
-  profile, displays the active mode, and persists either button's choice in the
-  managed MCP block. Mode changes apply to new Codex sessions after restart.
+  profile, displays the active mode, and persists each button's choice in the
+  managed MCP block. Default is persisted as a marker-only managed block, and
+  saved modes survive updates. Mode changes apply to new Codex sessions after restart.
 - `backups/luna-orchestrator-*`: original file snapshots and a restore manifest
   for each nontrivial install or uninstall.
 
@@ -67,7 +71,13 @@ percentages, and this release makes no quantified savings claim.
 
 ## Updating, uninstalling, and testing
 
-The EXE opens the workflow picker when run normally, and accepts `--mode 1.3|1.2`, `--status` and `--uninstall`; command-line installation can use
+The native Windows controller uses a restrained light sidebar and white workspace
+with rounded mode buttons and an explicit active selection, based on the
+[official Codex desktop reference](https://developers.openai.com/images/blog/long-horizon-4.jpeg).
+It retains the Luna Codex identity and native window controls. Switching a mode
+starts the installer asynchronously and disables mode changes until it finishes.
+
+The EXE opens the workflow picker when run normally, and accepts `--mode 1.3|1.2|default`, `--status` and `--uninstall`; command-line installation can use
 `--quiet` and `--codex-home PATH` for an isolated test profile. Installation
 removes the old managed Antigravity MCP/instruction blocks and the legacy
 unmarked Antigravity delegation section when it matches the known heading and
@@ -90,6 +100,8 @@ Codex TOML parsing when the CLI is available, uninstall, and a user-owned role
 collision. It does not make model requests. Restart Codex and open a new chat
 after installing: existing chats can keep their earlier tool inventory.
 
-The UI test runs actual button handlers for 1.3 -> 1.2 -> 1.3 against a fresh
+The UI test runs actual button handlers for 1.3 -> 1.2 -> default -> 1.3 against a fresh
 profile under the Windows temporary directory, verifies persistence and user
-settings, and writes a rendered screenshot. It does not modify the real profile.
+settings, and writes rendered screenshots of all three active selections. The
+smoke sequence uses explicit loaded, busy, and active-mode state rather than
+parsing translated labels. It does not modify the real profile.

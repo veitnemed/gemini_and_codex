@@ -4,7 +4,7 @@ param([string]$SetupExe = $null)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $repo = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-if (-not $SetupExe) { $SetupExe = Join-Path $repo 'dist\v1.3.0\Luna-Codex-Setup-v1.3.0.exe' }
+if (-not $SetupExe) { $SetupExe = Join-Path $repo 'dist\v1.3.1\Luna-Codex-Setup-v1.3.1.exe' }
 $runsRoot = Join-Path $repo '.test-runs'
 $run = Join-Path $runsRoot ('luna-installer-' + [Guid]::NewGuid().ToString('N'))
 $profile = Join-Path $run 'profile with spaces'
@@ -71,7 +71,7 @@ try {
         $effort = @{ fast = 'medium'; think = 'max'; plan = 'high' }[$role]
         Assert ($roleText.Contains('model = "gpt-6-luna"') -and $roleText.Contains("model_reasoning_effort = `"$effort`"")) "native role $role has the fixed model and effort"
     }
-    $runtime = Join-Path $profile 'tools\luna-orchestrator\v1.3.0'
+    $runtime = Join-Path $profile 'tools\luna-orchestrator\v1.3.1'
     Assert (Test-Path -LiteralPath (Join-Path $runtime 'node.exe') -PathType Leaf) 'bundled Node runtime installed'
     Assert (Test-Path -LiteralPath (Join-Path $runtime 'server.cjs') -PathType Leaf) 'Luna bridge installed'
     $status = Invoke-Setup @('--status', '--codex-home', $profile) 0
@@ -82,17 +82,39 @@ try {
     Assert ([IO.File]::ReadAllText((Join-Path $profile 'config.toml'), $utf8) -ceq $installed) 'reinstall is idempotent'
     Assert ([IO.File]::ReadAllText((Join-Path $profile 'AGENTS.md'), $utf8) -ceq $activeGuidance) 'reinstall does not duplicate policy'
 
+    $originalFastRole = [IO.File]::ReadAllText((Join-Path $profile 'agents\luna_fast.toml'), $utf8)
     $toCompat = Invoke-Setup @('--mode', '1.2', '--codex-home', $profile) 0
     $compatConfig = [IO.File]::ReadAllText((Join-Path $profile 'config.toml'), $utf8)
     Assert ($compatConfig.Contains('# workflow-mode=1.2') -and $compatConfig.Contains('[mcp_servers.luna_think]')) '1.2 mode persists and retains Luna Max'
     Assert (-not $compatConfig.Contains('[mcp_servers.luna_fast]') -and -not $compatConfig.Contains('[mcp_servers.luna_plan]')) '1.2 removes inactive MCP registrations'
     Assert (-not (Test-Path -LiteralPath (Join-Path $profile 'agents\luna_fast.toml')) -and -not (Test-Path -LiteralPath (Join-Path $profile 'agents\luna_plan.toml'))) '1.2 removes unchanged managed inactive role files'
+    $personalFastRole = Join-Path $profile 'agents\luna_fast.toml'
+    $personalFastRoleText = $originalFastRole + "# personal modification`r`n"
+    [IO.File]::WriteAllText($personalFastRole, $personalFastRoleText, $utf8)
     Assert ($compatConfig.Contains('model = "gpt-6-sol"') -and $compatConfig.Contains('[mcp_servers.personal]')) 'switch preserves root model and unrelated MCP'
     $compatStatus = Invoke-Setup @('--status', '--codex-home', $profile) 0
     Assert ($compatStatus.Contains('WorkflowMode=1.2') -and $compatStatus.Contains('Ready=True')) 'status reports active 1.2 mode'
+    $toDefault = Invoke-Setup @('--mode', 'default', '--codex-home', $profile) 0
+    $defaultConfig = [IO.File]::ReadAllText((Join-Path $profile 'config.toml'), $utf8)
+    Assert ($defaultConfig.Contains('# workflow-mode=default')) 'Default mode marker persists in the managed MCP block'
+    Assert (-not $defaultConfig.Contains('[mcp_servers.luna_')) 'Default mode removes all managed Luna MCP registrations'
+    $configWithoutManagedBlock = [regex]::Replace($defaultConfig, '(?ms)^# >>> luna-orchestrator managed MCP >>>\r?\n.*?^# <<< luna-orchestrator managed MCP <<<\r?\n?', '')
+    Assert ($configWithoutManagedBlock.TrimEnd("`r", "`n") -ceq $config.TrimEnd("`r", "`n")) 'Default restores original agents settings and leaves unrelated config intact'
+    Assert ([IO.File]::ReadAllText((Join-Path $profile 'AGENTS.md'), $utf8) -ceq $instructions) 'Default removes managed routing policy and preserves user guidance exactly'
+    Assert ([IO.File]::ReadAllText($personalFastRole, $utf8) -ceq $personalFastRoleText) 'Default preserves a user-owned role file'
+    foreach ($role in @('think', 'plan')) { Assert (-not (Test-Path -LiteralPath (Join-Path $profile "agents\luna_$role.toml"))) "Default removes unchanged managed role $role" }
+    Assert (Test-Path -LiteralPath (Join-Path $runtime 'server.cjs')) 'Default keeps runtime files available for switching back'
+    $defaultStatus = Invoke-Setup @('--status', '--codex-home', $profile) 0
+    Assert ($defaultStatus.Contains('WorkflowMode=default') -and $defaultStatus.Contains('Ready=True')) 'status recognizes persisted Default mode as ready'
+    [IO.File]::WriteAllText($personalFastRole, $originalFastRole, $utf8)
+    $dirtyDefaultStatus = Invoke-Setup @('--status', '--codex-home', $profile) 0
+    Assert ($dirtyDefaultStatus.Contains('Ready=False')) 'Default status detects an unchanged managed role left behind'
+    Remove-Item -LiteralPath $personalFastRole -Force
     $backToModern = Invoke-Setup @('--mode', '1.3', '--codex-home', $profile) 0
-    Assert ([IO.File]::ReadAllText((Join-Path $profile 'config.toml'), $utf8).Contains('# workflow-mode=1.3')) 'switching back persists 1.3 mode'
-    Assert ((Test-Path -LiteralPath (Join-Path $profile 'agents\luna_fast.toml')) -and (Test-Path -LiteralPath (Join-Path $profile 'agents\luna_plan.toml'))) 'switching back restores 1.3 roles'
+    $modernAgainConfig = [IO.File]::ReadAllText((Join-Path $profile 'config.toml'), $utf8)
+    Assert ($modernAgainConfig.Contains('# workflow-mode=1.3')) 'switching back from Default persists 1.3 mode'
+    Assert ((Test-Path -LiteralPath (Join-Path $profile 'agents\luna_fast.toml')) -and (Test-Path -LiteralPath (Join-Path $profile 'agents\luna_plan.toml'))) 'switching back from Default restores 1.3 roles'
+    Assert ([IO.File]::ReadAllText((Join-Path $profile 'AGENTS.md'), $utf8).Contains('Keep this paragraph exactly.')) 'switching back from Default preserves user guidance'
 
     $codexCommand = Get-Command codex -ErrorAction SilentlyContinue
     if ($codexCommand) {
@@ -108,9 +130,11 @@ try {
         } finally { $env:CODEX_HOME = $previous }
     }
 
+    $defaultBeforeUninstall = Invoke-Setup @('--mode', 'default', '--codex-home', $profile) 0
     $removed = Invoke-Setup @('--uninstall', '--codex-home', $profile) 0
     Assert ($removed.Contains('Uninstall complete')) 'EXE performed uninstall'
     Assert ([IO.File]::ReadAllText((Join-Path $profile 'config.toml'), $utf8) -ceq $config) 'uninstall restores personal config exactly'
+    Assert (-not ([IO.File]::ReadAllText((Join-Path $profile 'config.toml'), $utf8).Contains('# workflow-mode=default'))) 'uninstall removes the Default marker'
     Assert ([IO.File]::ReadAllText((Join-Path $profile 'AGENTS.md'), $utf8) -ceq $instructions) 'uninstall restores personal guidance exactly'
     foreach ($role in @('fast', 'think', 'plan')) {
         Assert (-not (Test-Path -LiteralPath (Join-Path $profile "agents\luna_$role.toml"))) "managed role $role removed"
